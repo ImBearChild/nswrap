@@ -2,37 +2,35 @@ extern crate nix;
 use nix::sched::CloneFlags;
 
 use crate::error::Error;
-pub enum Namespaces {
-    Cgroup,
-    IPC,
-    Mount,
-    Network,
-    User,
-    UTS,
-}
+use crate::config::NamespaceType;
 
-pub fn unshare(ns: Vec<Namespaces>) -> Result<(), Error>{
+
+pub fn unshare(ns: Vec<NamespaceType>) -> Result<(), Error>{
     let mut flags = CloneFlags::empty();
     for i in ns {
         match i {
-            Namespaces::Cgroup => {
+            NamespaceType::Cgroup => {
                 flags.set(CloneFlags::CLONE_NEWCGROUP, true);
             }
-            Namespaces::IPC => {
+            NamespaceType::Ipc => {
                 flags.set(CloneFlags::CLONE_NEWIPC, true);
             }
-            Namespaces::Mount => {
+            NamespaceType::Mount => {
                 flags.set(CloneFlags::CLONE_NEWNS, true);
             }
-            Namespaces::Network => {
+            NamespaceType::Network => {
                 flags.set(CloneFlags::CLONE_NEWNET, true);
             }
-            Namespaces::User => {
+            NamespaceType::User => {
                 flags.set(CloneFlags::CLONE_NEWUSER, true);
             },
-            Namespaces::UTS => {
+            NamespaceType::Uts => {
                 flags.set(CloneFlags::CLONE_NEWUTS, true);
             },
+            NamespaceType::Pid => {
+                flags.set(CloneFlags::CLONE_NEWPID, true);
+            },
+            _ => {}
         }
     }
     match nix::sched::unshare(flags) {

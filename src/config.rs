@@ -1,5 +1,38 @@
 use getset::{CopyGetters, Getters, Setters};
 use std::path::PathBuf;
+use std::ffi::{OsStr, OsString};
+
+#[derive(Default, Clone, Copy)]
+pub enum NamespaceType {
+    Mount,
+    Cgroup,
+    Uts,
+    Ipc,
+    #[default]
+    User,
+    Pid,
+    Network,
+    Time,
+}
+
+#[derive(Getters, Setters, CopyGetters, Default, Clone)]
+/// LinuxNamespace is the configuration for a Linux namespace.
+pub struct Namespace {
+    #[getset(get_copy = "pub", set = "pub")]
+    /// Type is the type of namespace.
+    pub(crate) typ: NamespaceType,
+
+    #[getset(get = "pub", set = "pub")]
+    /// Path is a path to an existing namespace persisted on disk that can
+    /// be joined and is of the same type
+    pub(crate) fd: Option<std::os::fd::RawFd>,
+}
+
+impl Namespace {
+    pub fn new(typ: NamespaceType) -> Self {
+        Self { typ , fd: None }
+    }
+}
 
 #[derive(Getters, Setters, CopyGetters, Default, Clone)]
 pub struct Root {
@@ -14,6 +47,8 @@ pub struct Root {
 pub struct Mount {
     #[getset(get = "pub", set = "pub")]
     destination: PathBuf,
+    // Path values for bind mounts are either absolute or relative to the
+    // bundle. A mount is a bind mount if it has either bind or rbind in the options.
     #[getset(get = "pub", set = "pub")]
     typ: Option<String>,
     #[getset(get = "pub", set = "pub")]
@@ -31,7 +66,10 @@ pub struct Process {
     user: Option<User>,
 
     #[getset(get = "pub", set = "pub")]
-    /// Args specifies the binary and arguments for the application to
+    bin: OsString,
+
+    #[getset(get = "pub", set = "pub")]
+    /// Args specifies the arguments for the application to
     /// execute.
     args: Vec<String>,
 
