@@ -100,12 +100,18 @@ pub struct LinuxIdMapping {
     #[getset(get_copy = "pub", set = "pub")]
     /// HostID is the starting UID/GID on the host to be mapped to
     /// `container_id`.
-    host_id: u32,
+    pub(crate) host_id: u32,
     #[getset(get_copy = "pub", set = "pub")]
     /// ContainerID is the starting UID/GID in the container.
-    container_id: u32,
+    pub(crate)container_id: u32,
 
     #[getset(get_copy = "pub", set = "pub")]
     /// Size is the number of IDs to be mapped.
-    size: u32,
+    pub(crate)size: u32,
+}
+
+pub enum LinuxIdMappingPreset {
+    Root,
+    Current,
+    Auto,
 }
