@@ -1,6 +1,6 @@
 use getset::{CopyGetters, Getters, Setters};
 use std::path::PathBuf;
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsString;
 
 #[derive(Default, Clone, Copy)]
 pub enum NamespaceType {

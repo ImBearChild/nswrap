@@ -4,10 +4,6 @@ use nix::sched::CloneFlags;
 use crate::error::Error;
 use crate::config::NamespaceType;
 
-pub(crate) fn shadow_mount() {
-    
-}
-
 pub fn unshare(ns: Vec<NamespaceType>) -> Result<(), Error>{
     let mut flags = CloneFlags::empty();
     for i in ns {

@@ -9,14 +9,14 @@
 //! namespaces, chroots and more part specific to linux.
 
 use std::{
-    ffi::{OsStr, OsString},
-    os::unix::{fs::DirBuilderExt, prelude::PermissionsExt},
+    ffi::OsStr,
+    os::unix::fs::DirBuilderExt,
 };
 pub mod config;
 pub mod error;
 pub mod util;
 extern crate xdg;
-use nix::sys::wait::Id;
+
 
 use crate::error::Error;
 
