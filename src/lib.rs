@@ -1,8 +1,8 @@
 //! This crate is aiming at providing an friendly interface
 //! of linux container technologies. These technologies includes
 //! system calls like `namespaces(7)` and `clone(2)`.
-//! It can be use as a low-level library
-//! to configure and execute program inside linux containers.
+//! It can be use as a low-level library to configure and
+//! execute program and closure inside linux containers.
 //!
 //! The `Wrap` follows a similar builder pattern to std::process::Command.
 //! In addition `Wrap` contains methods to configure linux
@@ -12,22 +12,19 @@ extern crate derive_builder;
 use getset::{CopyGetters, Getters, Setters};
 
 use std::{
+    collections::VecDeque,
     ffi::{OsStr, OsString},
-    os::unix::fs::DirBuilderExt,
+    os::fd::RawFd,
 };
-pub mod cmd;
 pub mod config;
+pub mod core;
 pub mod error;
 pub mod util;
 extern crate xdg;
 
 use crate::error::Error;
 
-/// Default value is 120k
-///
-/// https://wiki.musl-libc.org/functional-differences-from-glibc.html
-const STACK_SIZE: usize = 122880;
-
+/// Boxed closure to execute in child process
 pub type WrapCbBox<'a> = Box<dyn FnOnce() -> isize + 'a>;
 
 /// Main class of spawn process and execute functions.
@@ -36,14 +33,14 @@ pub struct Wrap<'a> {
     process: Option<config::Process>,
     root: Option<config::Root>,
 
-    namespaces: Vec<config::Namespace>,
+    namespaces: VecDeque<config::Namespace>,
     mounts: Vec<config::Mount>,
     uid_maps: Vec<config::IdMap>,
     gid_maps: Vec<config::IdMap>,
-    callbacks: Vec<WrapCbBox<'a>>,
+    callbacks: VecDeque<WrapCbBox<'a>>,
 
     sandbox_mnt: bool,
-    in_subprocess: bool,
+    in_child: bool,
 }
 
 /// The reference to the running child.
@@ -51,6 +48,7 @@ pub struct Child {
     pid: nix::unistd::Pid,
 }
 
+/// Exit status of the child.
 pub struct ExitStatus {
     wait_status: nix::sys::wait::WaitStatus,
 }
@@ -68,6 +66,12 @@ impl<'a> Wrap<'a> {
         config.set_bin(OsString::from(program.as_ref()));
         s.set_process(config);
         s
+    }
+
+    /// Executes the callbacks and program in a child process,
+    /// returning a handle to it.
+    pub fn spawn(&mut self) -> Result<Child, Error> {
+        self.spwan_inner()
     }
 
     /// Add a callback to run in the child before execute the program.
@@ -97,60 +101,45 @@ impl<'a> Wrap<'a> {
     ///     https://github.com/nix-rust/nix/issues/360#issuecomment-359271308
     /// [github issue of rust]:
     ///     https://github.com/rust-lang/rust/issues/39575
-    /// [`std::env`]: mod@crate::env
     pub fn callback<F>(&mut self, cb: F) -> &mut Self
     where
         F: FnOnce() -> isize + Send + 'static,
     {
-        self.callbacks.push(Box::new(cb));
+        self.callbacks.push_back(Box::new(cb));
         self
     }
 
-    /// Executes the callbacks and program in a child process,
-    /// returning a handle to it.
-    pub fn spawn(&mut self) -> Result<Child, Error> {
-        use nix::sched::CloneFlags;
-        let mut p: Box<[u8; STACK_SIZE]> = Box::new([0; STACK_SIZE]);
-        //let mut num = 0;
-        let pid = match nix::sched::clone(
-            Box::new(|| {
-                // Drop mmap and fd?
-
-                // setup a flag here, prevent calling some method without clone(2)
-                self.in_subprocess = true;
-
-                if (self.uid_maps.len() + self.gid_maps.len()) > 0 {
-                    self.set_id_map();
-                }
-
-                match self.sandbox_mnt {
-                    true => self.set_up_tmpfs_cwd(),
-                    false => (),
-                }
-
-                self.execute_callbacks()
-            }),
-            &mut *p,
-            CloneFlags::CLONE_NEWUSER | CloneFlags::CLONE_NEWNS, // TODO: Real follow flags
-            Some(libc::SIGCHLD),
-        ) {
-            Ok(it) => it,
-            Err(err) => return Err(Error::NixErrno(err)),
-        };
-        Ok(Child { pid })
-    }
-
     /// Set new `namespace(7)` for child process.
+    ///
     /// ```
     /// use nswrap::Wrap;
     /// use nswrap::config;
-    /// let wrap = Wrap::new()
-    ///     .callback(|| {print!("Cool!");return 5})
-    ///     .ns_new(config::NamespaceType::User);
+    /// let mut wrap = Wrap::new();
+    /// wrap.callback(|| {print!("Cool!");return 5})
+    ///     .unshare(config::NamespaceType::User);
     /// wrap.spawn().unwrap().wait().unwrap();
     /// ```
-    pub fn ns_new(&mut self, typ: config::NamespaceType) -> &mut Self {
+    ///
+    /// The order in which this method is called will affect the result.
+    /// Refer to [`Self::add_namespace()`] for more information.
+    pub fn unshare(&mut self, typ: config::NamespaceType) -> &mut Self {
         self.add_namespace(config::Namespace { typ, fd: None })
+    }
+
+    /// Reassociate child process with a namespace.
+    ///
+    /// The order in which this method is called will affect the result.
+    ///
+    /// # Panics
+    /// 
+    /// This method *can not* be called once [`Self::unshare()`] is called,
+    /// otherwise it will panic.
+    /// Refer to [`Self::add_namespace()`] for more information.
+    pub fn nsenter(&mut self, typ: config::NamespaceType, pidfd: RawFd) -> &mut Self {
+        self.add_namespace(config::Namespace {
+            typ,
+            fd: Some(pidfd),
+        })
     }
 
     /// Add some mount points and file path that application usually needs.
@@ -166,6 +155,9 @@ impl<'a> Wrap<'a> {
         todo!()
     }
 
+    /// Sets user id mappings for new process.
+    ///
+    /// Each call to this function will add an item in `/proc/{pid}/uid_map`.
     pub fn uid_map(&mut self, host_id: u32, container_id: u32, size: u32) -> &mut Self {
         self.add_uid_map(config::IdMap {
             host_id,
@@ -174,6 +166,9 @@ impl<'a> Wrap<'a> {
         })
     }
 
+    /// Sets group id mappings for new process.
+    ///
+    /// Each call to this function will add an item in `/proc/{pid}/gid_map`.
     pub fn gid_map(&mut self, host_id: u32, container_id: u32, size: u32) -> &mut Self {
         self.add_gid_map(config::IdMap {
             host_id,
@@ -182,6 +177,7 @@ impl<'a> Wrap<'a> {
         })
     }
 
+    /// Use some preset to set id mapping in container.
     pub fn id_map_preset(&mut self, set: config::IdMapPreset) -> &mut Self {
         match set {
             config::IdMapPreset::Root => {
@@ -209,12 +205,41 @@ impl<'a> Wrap<'a> {
 
 /// Public builder pattern method
 impl<'a> Wrap<'_> {
-    /// Set namespace for child process. This function accept structre
+    /// Set namespace for child process. This method accept structre
     /// including file descriptors to enter existing namespace.
     ///
-    /// Use `self.ns_new()` if you only want new namespace.
+    /// # Panics
+    /// 
+    /// Generally speaking, Wrap will execute `setns(2)` 
+    /// and `clone(2)` (or `unshre(2)`, 
+    /// depending on the implementation detail) in the order 
+    /// you add call [`Self::nsenter()`] or [`Self::add_namespace()`]. 
+    /// 
+    /// Child can enter a existing namespace and create 
+    /// new namespace in it (making nested namespace), but it makes no sense 
+    /// to enter a namespace inside a new namespace.
+    /// So this method will panic.
+    /// 
+    /// ```should_panic
+    /// use nswrap::{Wrap,config};
+    /// let mut w = Wrap::new();
+    /// w.unshare(config::NamespaceType::Cgroup);
+    /// w.nsenter(config::NamespaceType::Cgroup, 114);
+    /// ```
+    ///
+    /// Use `self.unshare()` if you only want new namespace.
     pub fn add_namespace(&mut self, ns: config::Namespace) -> &mut Self {
-        self.namespaces.push(ns);
+        if ns.fd().is_some() {
+            match self.namespaces.back() {
+                Some(n) => match n.fd() {
+                    Some(_) => (),
+                    None => panic!("Method misuse!"),
+                },
+                None => (),
+            }
+        }
+
+        self.namespaces.push_back(ns);
         self
     }
 
@@ -288,7 +313,7 @@ mod tests {
     }
 
     #[test]
-    fn thread_unshare() {
+    fn bind_mount() {
         use std::fs::File;
         use std::io::prelude::*;
         make_test_dir();
@@ -306,7 +331,7 @@ mod tests {
             return 0;
         };
         let mut wrap = Wrap::new();
-        wrap.callback(cb).ns_new(config::NamespaceType::User);
+        wrap.callback(cb).unshare(config::NamespaceType::User);
         wrap.spawn().unwrap().wait().unwrap();
 
         // Check Result
@@ -322,16 +347,32 @@ mod tests {
             return 16;
         };
         let mut wrap = Wrap::new();
-        wrap.callback(cb).ns_new(config::NamespaceType::User);
+        wrap.callback(cb).unshare(config::NamespaceType::User);
         let ret = wrap.spawn().unwrap().wait().unwrap().code().unwrap();
         assert_eq!(16, ret);
+    }
+
+    #[test]
+    fn callback_return_value_in_thread() {
+        use std::thread;
+
+        let thread_join_handle = thread::spawn(move || {
+            let cb = || {
+                return 16;
+            };
+            let mut wrap = Wrap::new();
+            wrap.callback(cb).unshare(config::NamespaceType::User);
+            let ret = wrap.spawn().unwrap().wait().unwrap().code().unwrap();
+            ret
+        });
+
+        assert_eq!(thread_join_handle.join().unwrap(), 16);
     }
 
     #[test]
     fn tmpfs_root() {
         let cb = || {
             use config::NamespaceType;
-            use std::fs::File;
             use std::path::Path;
             let mut v = Vec::new();
             v.push(NamespaceType::Mount);
@@ -347,10 +388,18 @@ mod tests {
         let mut binding = Wrap::new();
         let wrap = binding
             .callback(cb)
-            .ns_new(config::NamespaceType::User)
+            .unshare(config::NamespaceType::User)
             .sandbox_mnt(true)
             .id_map_preset(config::IdMapPreset::Current);
         let ret = wrap.spawn().unwrap().wait().unwrap().code().unwrap();
         assert_eq!(32, ret);
+    }
+
+    #[test]
+    #[should_panic]
+    fn misuse_add_namespace() {
+        let mut w = Wrap::new();
+        w.unshare(config::NamespaceType::Cgroup);
+        w.nsenter(config::NamespaceType::Cgroup, 114);
     }
 }

@@ -15,7 +15,7 @@ pub enum NamespaceType {
     Time,
 }
 
-#[derive(Getters, Setters, CopyGetters, Default, Clone)]
+#[derive(Builder, Getters, Setters, CopyGetters, Default, Clone)]
 /// LinuxNamespace is the configuration for a Linux namespace.
 pub struct Namespace {
     #[getset(get_copy = "pub", set = "pub")]
@@ -34,7 +34,7 @@ impl Namespace {
     }
 }
 
-#[derive(Getters, Setters, CopyGetters, Default, Clone)]
+#[derive(Builder, Getters, Setters, CopyGetters, Default, Clone)]
 pub struct Root {
     #[getset(get = "pub", set = "pub")]
     path: PathBuf,
@@ -43,7 +43,7 @@ pub struct Root {
     readonly: Option<bool>,
 }
 
-#[derive(Getters, Setters, CopyGetters, Default, Clone)]
+#[derive(Builder, Getters, Setters, CopyGetters, Default, Clone)]
 pub struct Mount {
     #[getset(get = "pub", set = "pub")]
     destination: PathBuf,
@@ -83,7 +83,7 @@ pub struct Process {
     cwd: PathBuf,
 }
 
-#[derive(Getters, Setters, CopyGetters, Default, Clone)]
+#[derive(Builder, Getters, Setters, CopyGetters, Default, Clone)]
 pub struct User {
     #[getset(get_copy = "pub", set = "pub")]
     /// UID is the user id.
