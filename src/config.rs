@@ -1,6 +1,6 @@
 use getset::{CopyGetters, Getters, Setters};
-use std::path::PathBuf;
 use std::ffi::OsString;
+use std::path::PathBuf;
 
 #[derive(Default, Clone, Copy)]
 pub enum NamespaceType {
@@ -30,7 +30,7 @@ pub struct Namespace {
 
 impl Namespace {
     pub fn new(typ: NamespaceType) -> Self {
-        Self { typ , fd: None }
+        Self { typ, fd: None }
     }
 }
 
@@ -57,7 +57,7 @@ pub struct Mount {
     options: Option<Vec<String>>,
 }
 
-#[derive(Getters, Setters, CopyGetters, Default, Clone)]
+#[derive(Builder, Getters, Setters, CopyGetters, Default, Clone)]
 /// Process contains information to start a specific application inside the
 /// container.
 pub struct Process {
@@ -66,7 +66,7 @@ pub struct Process {
     user: Option<User>,
 
     #[getset(get = "pub", set = "pub")]
-    bin: OsString,
+    pub(crate) bin: OsString,
 
     #[getset(get = "pub", set = "pub")]
     /// Args specifies the arguments for the application to
@@ -94,23 +94,23 @@ pub struct User {
     gid: u32,
 }
 
-#[derive(Getters, Setters, CopyGetters, Default, Clone)]
+#[derive(Builder, Getters, Setters, CopyGetters, Default, Clone)]
 /// LinuxIDMapping specifies UID/GID mappings.
-pub struct LinuxIdMapping {
+pub struct IdMap {
     #[getset(get_copy = "pub", set = "pub")]
     /// HostID is the starting UID/GID on the host to be mapped to
     /// `container_id`.
     pub(crate) host_id: u32,
     #[getset(get_copy = "pub", set = "pub")]
     /// ContainerID is the starting UID/GID in the container.
-    pub(crate)container_id: u32,
+    pub(crate) container_id: u32,
 
     #[getset(get_copy = "pub", set = "pub")]
     /// Size is the number of IDs to be mapped.
-    pub(crate)size: u32,
+    pub(crate) size: u32,
 }
 
-pub enum LinuxIdMappingPreset {
+pub enum IdMapPreset {
     Root,
     Current,
     Auto,
