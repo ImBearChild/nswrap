@@ -9,6 +9,7 @@ edition = "2021"
 getset = "0.1"
 derive_builder = "0.12"
 nix = { version = "^0.26", features = ["user", "mount"] }
+rustix =  { version = "0.38", features = ["process"] }
 xdg = "^2.1"
 thiserror = "1.0"
 libc = "0.2"

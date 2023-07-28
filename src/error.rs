@@ -6,8 +6,8 @@ pub enum Error {
     UnshareFailed(nix::errno::Errno),
     #[error("Clone failed: `{0}`")]
     CloneFailed(nix::errno::Errno),
-    #[error("Nix lib failed: `{0}`")]
-    NixErrno(nix::errno::Errno),
+    #[error("Unix API lib failed: `{0}`")]
+    OsErrno(i32),
     #[error("unknown data store error")]
     Unknown,
 }

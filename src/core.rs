@@ -11,10 +11,13 @@ use crate::{config, util, Child, Error};
 use getset::{CopyGetters, Getters, Setters};
 use nix::sched::CloneFlags;
 
-/// Default value is 120k
+/// Default stack size
 ///
 /// https://wiki.musl-libc.org/functional-differences-from-glibc.html
 const STACK_SIZE: usize = 122880;
+
+// preventing running some function outside the child process
+static mut IS_CHILD: bool = false;
 
 /// Boxed closure to execute in child process
 pub type WrapCbBox<'a> = Box<dyn FnOnce() -> isize + 'a>;
@@ -36,35 +39,51 @@ pub(crate) struct WrapCore<'a> {
 }
 
 impl WrapCore<'_> {
+    fn run_child(&mut self) -> isize {
+        unsafe {
+            if IS_CHILD != true {
+                panic!()
+            }
+        }
+
+        self.apply_nsenter();
+        self.apply_unshare();
+
+        // Drop mmap and fd?
+
+        if (self.uid_maps.len() + self.gid_maps.len()) > 0 {
+            self.set_id_map();
+        }
+
+        if self.sandbox_mnt {
+            self.set_up_tmpfs_cwd();
+        }
+
+        self.execute_callbacks()
+    }
+
     pub(crate) fn spwan(mut self) -> Result<Child, Error> {
         let mut p: Box<[u8; STACK_SIZE]> = Box::new([0; STACK_SIZE]);
+
         let pid = match nix::sched::clone(
             Box::new(move || -> isize {
-                self.apply_nsenter();
-                self.apply_unshare();
+                unsafe { IS_CHILD = true };
 
-                // Drop mmap and fd?
-
-                if (self.uid_maps.len() + self.gid_maps.len()) > 0 {
-                    self.set_id_map();
-                }
-
-                match self.sandbox_mnt {
-                    true => self.set_up_tmpfs_cwd(),
-                    false => (),
-                }
-
-                self.execute_callbacks()
+                self.run_child()
             }),
             &mut *p,
             CloneFlags::empty(),
-            // TODO: Real follow flags
             Some(libc::SIGCHLD),
         ) {
             Ok(it) => it,
-            Err(err) => return Err(Error::NixErrno(err)),
+            Err(_) => return Err(Error::OsErrno(unsafe {
+                *libc::__errno_location().to_owned()
+            })),
         };
-        Ok(Child { pid })
+
+        Ok(Child {
+            pid: unsafe { rustix::process::Pid::from_raw_unchecked(pid.as_raw()) },
+        })
     }
 
     pub(crate) fn apply_nsenter(&mut self) {

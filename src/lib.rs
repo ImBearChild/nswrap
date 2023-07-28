@@ -14,7 +14,7 @@ use getset::{CopyGetters, Getters, Setters};
 use std::{
     collections::VecDeque,
     ffi::{OsStr, OsString},
-    os::fd::RawFd,
+    os::{fd::RawFd, unix::process::ExitStatusExt},
 };
 pub mod config;
 pub mod core;
@@ -45,12 +45,13 @@ pub struct Wrap<'a> {
 
 /// The reference to the running child.
 pub struct Child {
-    pid: nix::unistd::Pid,
+    pid: rustix::process::Pid,
 }
 
 /// Exit status of the child.
 pub struct ExitStatus {
-    wait_status: nix::sys::wait::WaitStatus,
+    wait_status: rustix::process::WaitStatus,
+    std_exit_status: std::process::ExitStatus,
 }
 
 /// Core implementation
@@ -88,6 +89,14 @@ impl<'a> Wrap<'a> {
         };
         wrapcore.callbacks.append(&mut self.callbacks);
         wrapcore.spwan()
+    }
+
+    /// Executes the command and callback functions in a child process,
+    /// waiting for it to finish and collecting its status.
+    ///
+    /// By default, stdin, stdout and stderr are inherited from the parent.
+    pub fn status(&mut self) -> Result<ExitStatus, Error> {
+        self.spawn()?.wait()
     }
 
     /// Add a callback to run in the child before execute the program.
@@ -267,28 +276,52 @@ impl<'a> Wrap<'_> {
 
 impl Child {
     pub fn wait(&mut self) -> Result<ExitStatus, Error> {
-        match nix::sys::wait::waitpid(self.pid, None) {
-            Ok(r) => Ok(ExitStatus::new(r)),
-            Err(err) => Err(Error::NixErrno(err)),
+        match rustix::process::waitpid(Some(self.pid), rustix::process::WaitOptions::empty()) {
+            Ok(r) => Ok(ExitStatus::new(r.unwrap())),
+            Err(err) => Err(Error::OsErrno(err.raw_os_error())),
         }
     }
 }
 
 impl ExitStatus {
-    pub fn new(wait_status: nix::sys::wait::WaitStatus) -> Self {
-        Self { wait_status }
+    pub fn new(wait_status: rustix::process::WaitStatus) -> Self {
+        Self {
+            wait_status,
+            std_exit_status: std::process::ExitStatus::from_raw(
+                wait_status.as_raw().try_into().unwrap(),
+            ),
+        }
     }
 
     pub fn code(&self) -> Option<i32> {
-        match self.wait_status {
-            nix::sys::wait::WaitStatus::Exited(_, ret) => Some(ret),
-            _ => None,
+        match self.wait_status.exit_status() {
+            Some(r) => Some(i32::try_from(r).unwrap()),
+            None => None,
         }
+    }
+
+    pub fn success(&self) -> bool {
+        self.std_exit_status.success()
+    }
+
+    pub fn signal(&self) -> Option<i32> {
+        self.std_exit_status.signal()
+    }
+    pub fn core_dumped(&self) -> bool {
+        self.std_exit_status.core_dumped()
+    }
+    pub fn stopped_signal(&self) -> Option<i32> {
+        self.std_exit_status.stopped_signal()
+    }
+    pub fn continued(&self) -> bool {
+        self.std_exit_status.continued()
     }
 }
 
 #[cfg(test)]
 mod tests {
+
+    use nix::sched::CloneFlags;
 
     use super::*;
     const _TMP_DIR: &str = "/tmp/nswrap.test/";
@@ -303,16 +336,15 @@ mod tests {
     }
 
     #[test]
+    // Create a bind mount and write files into it.
+    // just to make sure mount namespace works correctly.
     fn bind_mount() {
         use std::fs::File;
         use std::io::prelude::*;
         make_test_dir();
         let cb = || {
-            use config::NamespaceType;
             use std::fs::File;
-            let mut v = Vec::new();
-            v.push(NamespaceType::Mount);
-            util::unshare(v).unwrap();
+            nix::sched::unshare(CloneFlags::CLONE_NEWNS).unwrap();
             let mut flags = nix::mount::MsFlags::empty();
             flags.set(nix::mount::MsFlags::MS_BIND, true);
             nix::mount::mount(Some(_TMP_DIR1), _TMP_DIR2, Some(""), flags, Some("")).unwrap();
@@ -359,6 +391,21 @@ mod tests {
         assert_eq!(thread_join_handle.join().unwrap(), 16);
     }
 
+    /// https://github.com/rust-lang/rust/issues/79740
+    #[test]
+    fn panic_in_thread() {
+        use std::thread;
+
+        let thread_join_handle = thread::spawn(move || {
+            let cb = || panic!();
+            let mut wrap = Wrap::new();
+            wrap.callback(cb).unshare(config::NamespaceType::User);
+            let ret = wrap.spawn().unwrap().wait().unwrap();
+            println!("{:?}", ret.wait_status)
+        });
+        thread_join_handle.join();
+    }
+
     #[test]
     fn tmpfs_root_sandbox_mnt() {
         let cb = || {
@@ -378,5 +425,31 @@ mod tests {
             .id_map_preset(config::IdMapPreset::Current);
         let ret = wrap.spawn().unwrap().wait().unwrap().code().unwrap();
         assert_eq!(32, ret);
+    }
+
+    #[test]
+    fn raw_child_pipe() {
+        use nix::fcntl::OFlag;
+        let (read_end, write_end) = nix::unistd::pipe2(OFlag::O_CLOEXEC).unwrap();
+        let cb = move || {
+            nix::unistd::close(read_end).unwrap();
+            nix::unistd::dup3(write_end, 16, OFlag::empty()).unwrap();
+            nix::unistd::write(16, b"16").unwrap();
+            return 42;
+        };
+        let mut binding = Wrap::new();
+        let wrap = binding
+            .callback(cb)
+            .unshare(config::NamespaceType::User)
+            .unshare(config::NamespaceType::Mount)
+            .sandbox_mnt(true)
+            .id_map_preset(config::IdMapPreset::Current);
+        let ret = wrap.spawn();
+        nix::unistd::close(write_end).unwrap();
+        let ret = ret.unwrap().wait().unwrap().code().unwrap();
+        assert_eq!(ret, 42);
+        let mut buf: [u8; 2] = *b"00";
+        nix::unistd::read(read_end, &mut buf).unwrap();
+        assert_eq!(buf, *b"16");
     }
 }
