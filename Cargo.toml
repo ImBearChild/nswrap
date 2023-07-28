@@ -13,6 +13,8 @@ rustix =  { version = "0.38", features = ["process"] }
 xdg = "^2.1"
 thiserror = "1.0"
 libc = "0.2"
+bitflags = "2.3.3"
+linux-raw-sys = "0.4.3"
 # educe = { version = "*", features = [
 #     "Debug",
 #     "Default",

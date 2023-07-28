@@ -65,24 +65,22 @@ impl WrapCore<'_> {
     pub(crate) fn spwan(mut self) -> Result<Child, Error> {
         let mut p: Box<[u8; STACK_SIZE]> = Box::new([0; STACK_SIZE]);
 
-        let pid = match nix::sched::clone(
+        let pid = match crate::util::clone(
             Box::new(move || -> isize {
                 unsafe { IS_CHILD = true };
 
                 self.run_child()
             }),
             &mut *p,
-            CloneFlags::empty(),
+            util::CloneFlags::empty(),
             Some(libc::SIGCHLD),
         ) {
             Ok(it) => it,
-            Err(_) => return Err(Error::OsErrno(unsafe {
-                *libc::__errno_location().to_owned()
-            })),
+            Err(e) => return Err(e),
         };
 
         Ok(Child {
-            pid: unsafe { rustix::process::Pid::from_raw_unchecked(pid.as_raw()) },
+            pid: unsafe { rustix::process::Pid::from_raw_unchecked(pid.try_into().unwrap()) },
         })
     }
 

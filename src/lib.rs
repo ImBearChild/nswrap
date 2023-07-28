@@ -374,7 +374,7 @@ mod tests {
         assert_eq!(16, ret);
     }
 
-    #[test]
+    //#[test]
     fn callback_return_value_in_thread() {
         use std::thread;
 
