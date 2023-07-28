@@ -1,12 +1,14 @@
 #![doc(hidden)]
 
 use std::{
+    collections::VecDeque,
     ffi::{OsStr, OsString},
     fs::OpenOptions,
     os::{fd::IntoRawFd, unix::prelude::OsStrExt},
 };
 
 use crate::{config, util, Child, Error};
+use getset::{CopyGetters, Getters, Setters};
 use nix::sched::CloneFlags;
 
 /// Default value is 120k
@@ -14,17 +16,34 @@ use nix::sched::CloneFlags;
 /// https://wiki.musl-libc.org/functional-differences-from-glibc.html
 const STACK_SIZE: usize = 122880;
 
-impl crate::Wrap<'_> {
-    pub(crate) fn spwan_inner(&mut self) -> Result<Child, Error> {
-        
-        self.apply_nsenter();
+/// Boxed closure to execute in child process
+pub type WrapCbBox<'a> = Box<dyn FnOnce() -> isize + 'a>;
+
+//#[derive(Getters, Setters, CopyGetters, Default)]
+pub(crate) struct WrapCore<'a> {
+    pub(crate) process: Option<config::Process>,
+    pub(crate) root: Option<config::Root>,
+
+    pub(crate) mounts: Vec<config::Mount>,
+    pub(crate) uid_maps: Vec<config::IdMap>,
+    pub(crate) gid_maps: Vec<config::IdMap>,
+    pub(crate) callbacks: VecDeque<WrapCbBox<'a>>,
+
+    pub(crate) namespace_nsenter: config::NamespaceSet,
+    pub(crate) namespace_unshare: config::NamespaceSet,
+
+    pub(crate) sandbox_mnt: bool,
+}
+
+impl WrapCore<'_> {
+    pub(crate) fn spwan(mut self) -> Result<Child, Error> {
         let mut p: Box<[u8; STACK_SIZE]> = Box::new([0; STACK_SIZE]);
         let pid = match nix::sched::clone(
-            Box::new(|| {
-                // Drop mmap and fd?
+            Box::new(move || -> isize {
+                self.apply_nsenter();
+                self.apply_unshare();
 
-                // setup a flag here, prevent calling some method without clone(2)
-                self.in_child = true;
+                // Drop mmap and fd?
 
                 if (self.uid_maps.len() + self.gid_maps.len()) > 0 {
                     self.set_id_map();
@@ -38,7 +57,7 @@ impl crate::Wrap<'_> {
                 self.execute_callbacks()
             }),
             &mut *p,
-            CloneFlags::CLONE_NEWUSER | CloneFlags::CLONE_NEWNS,
+            CloneFlags::empty(),
             // TODO: Real follow flags
             Some(libc::SIGCHLD),
         ) {
@@ -49,32 +68,35 @@ impl crate::Wrap<'_> {
     }
 
     pub(crate) fn apply_nsenter(&mut self) {
-        for i in 0..self.namespaces.len() {
-            match self.namespaces[i].fd {
-                Some(f) => {
-                    let i = self.namespaces.pop_front().unwrap();
-                    assert_eq!(f,i.fd().unwrap());
-                    nix::sched::setns(
-                        f,
-                        match i.typ() {
-                            config::NamespaceType::Mount => CloneFlags::CLONE_NEWNS,
-                            config::NamespaceType::Cgroup => CloneFlags::CLONE_NEWCGROUP,
-                            config::NamespaceType::Uts => CloneFlags::CLONE_NEWUTS,
-                            config::NamespaceType::Ipc => CloneFlags::CLONE_NEWIPC,
-                            config::NamespaceType::User => CloneFlags::CLONE_NEWUSER,
-                            config::NamespaceType::Pid => CloneFlags::CLONE_NEWPID,
-                            config::NamespaceType::Network => CloneFlags::CLONE_NEWNET,
-                            config::NamespaceType::Time => todo!(),
-                        },
-                    );
-                }
-                None => break,
-            }
-        }
+        Self::apply_namespace_item(self.namespace_nsenter.user, CloneFlags::CLONE_NEWUSER);
+        Self::apply_namespace_item(self.namespace_nsenter.mount, CloneFlags::CLONE_NEWNS);
+        Self::apply_namespace_item(self.namespace_nsenter.cgroup, CloneFlags::CLONE_NEWCGROUP);
+        Self::apply_namespace_item(self.namespace_nsenter.uts, CloneFlags::CLONE_NEWUTS);
+        Self::apply_namespace_item(self.namespace_nsenter.ipc, CloneFlags::CLONE_NEWIPC);
+        Self::apply_namespace_item(self.namespace_nsenter.pid, CloneFlags::CLONE_NEWPID);
+        Self::apply_namespace_item(self.namespace_nsenter.network, CloneFlags::CLONE_NEWNET);
     }
 
-    pub(crate) fn check_is_child(&self) {
-        assert_eq!(self.in_child, true);
+    pub(crate) fn apply_unshare(&mut self) {
+        Self::apply_namespace_item(self.namespace_unshare.user, CloneFlags::CLONE_NEWUSER);
+        Self::apply_namespace_item(self.namespace_unshare.mount, CloneFlags::CLONE_NEWNS);
+        Self::apply_namespace_item(self.namespace_unshare.cgroup, CloneFlags::CLONE_NEWCGROUP);
+        Self::apply_namespace_item(self.namespace_unshare.uts, CloneFlags::CLONE_NEWUTS);
+        Self::apply_namespace_item(self.namespace_unshare.ipc, CloneFlags::CLONE_NEWIPC);
+        Self::apply_namespace_item(self.namespace_unshare.pid, CloneFlags::CLONE_NEWPID);
+        Self::apply_namespace_item(self.namespace_unshare.network, CloneFlags::CLONE_NEWNET);
+    }
+
+    fn apply_namespace_item(ns: config::NamespaceItem, flag: CloneFlags) {
+        match ns {
+            config::NamespaceItem::None => (),
+            config::NamespaceItem::Unshare => {
+                nix::sched::unshare(flag).unwrap();
+            }
+            config::NamespaceItem::Enter(fd) => {
+                nix::sched::setns(fd, flag).unwrap();
+            }
+        }
     }
 
     pub(crate) fn write_id_map<S: AsRef<OsStr>>(file: S, map: &Vec<config::IdMap>) {
@@ -106,8 +128,6 @@ impl crate::Wrap<'_> {
     }
 
     pub(crate) fn execute_callbacks(&mut self) -> isize {
-        self.check_is_child();
-
         let mut ret = 0;
         for _i in 0..self.callbacks.len() {
             ret = self.callbacks.pop_front().unwrap()();
@@ -120,8 +140,6 @@ impl crate::Wrap<'_> {
     /// Due to kernel bug#183461 ,this can only be called after setup uid
     /// and gid mapping.
     pub(crate) fn set_up_tmpfs_cwd(&self) {
-        self.check_is_child();
-
         use nix::mount::{mount, MsFlags};
         use nix::unistd::pivot_root;
         use std::env::set_current_dir;

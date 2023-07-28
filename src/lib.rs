@@ -24,8 +24,7 @@ extern crate xdg;
 
 use crate::error::Error;
 
-/// Boxed closure to execute in child process
-pub type WrapCbBox<'a> = Box<dyn FnOnce() -> isize + 'a>;
+pub use crate::core::WrapCbBox;
 
 /// Main class of spawn process and execute functions.
 #[derive(Getters, Setters, CopyGetters, Default)]
@@ -33,14 +32,15 @@ pub struct Wrap<'a> {
     process: Option<config::Process>,
     root: Option<config::Root>,
 
-    namespaces: VecDeque<config::Namespace>,
     mounts: Vec<config::Mount>,
     uid_maps: Vec<config::IdMap>,
     gid_maps: Vec<config::IdMap>,
     callbacks: VecDeque<WrapCbBox<'a>>,
 
+    namespace_nsenter: config::NamespaceSet,
+    namespace_unshare: config::NamespaceSet,
+
     sandbox_mnt: bool,
-    in_child: bool,
 }
 
 /// The reference to the running child.
@@ -60,6 +60,7 @@ impl<'a> Wrap<'a> {
         Default::default()
     }
 
+    /// Create a new instance with command to execute.
     pub fn new_cmd<S: AsRef<OsStr>>(program: S) -> Self {
         let mut s = Self::new();
         let mut config = config::Process::default();
@@ -70,8 +71,23 @@ impl<'a> Wrap<'a> {
 
     /// Executes the callbacks and program in a child process,
     /// returning a handle to it.
+    /// 
+    /// This instance of Wrap will not be consumed, but it's
+    /// queue of callback functions will be empty.
     pub fn spawn(&mut self) -> Result<Child, Error> {
-        self.spwan_inner()
+        let mut wrapcore = core::WrapCore {
+            process: self.process.clone(),
+            root: self.root.clone(),
+            mounts: self.mounts.clone(),
+            uid_maps: self.uid_maps.clone(),
+            gid_maps: self.gid_maps.clone(),
+            callbacks: VecDeque::new(),
+            namespace_nsenter: self.namespace_nsenter.clone(),
+            namespace_unshare: self.namespace_unshare.clone(),
+            sandbox_mnt: self.sandbox_mnt.clone(),
+        };
+        wrapcore.callbacks.append(&mut self.callbacks);
+        wrapcore.spwan()
     }
 
     /// Add a callback to run in the child before execute the program.
@@ -119,27 +135,15 @@ impl<'a> Wrap<'a> {
     ///     .unshare(config::NamespaceType::User);
     /// wrap.spawn().unwrap().wait().unwrap();
     /// ```
-    ///
-    /// The order in which this method is called will affect the result.
-    /// Refer to [`Self::add_namespace()`] for more information.
     pub fn unshare(&mut self, typ: config::NamespaceType) -> &mut Self {
-        self.add_namespace(config::Namespace { typ, fd: None })
+        self.add_namespace(typ, config::NamespaceItem::Unshare)
     }
 
     /// Reassociate child process with a namespace.
     ///
     /// The order in which this method is called will affect the result.
-    ///
-    /// # Panics
-    /// 
-    /// This method *can not* be called once [`Self::unshare()`] is called,
-    /// otherwise it will panic.
-    /// Refer to [`Self::add_namespace()`] for more information.
     pub fn nsenter(&mut self, typ: config::NamespaceType, pidfd: RawFd) -> &mut Self {
-        self.add_namespace(config::Namespace {
-            typ,
-            fd: Some(pidfd),
-        })
+        self.add_namespace(typ, config::NamespaceItem::Enter(pidfd))
     }
 
     /// Add some mount points and file path that application usually needs.
@@ -205,71 +209,57 @@ impl<'a> Wrap<'a> {
 
 /// Public builder pattern method
 impl<'a> Wrap<'_> {
-    /// Set namespace for child process. This method accept structre
-    /// including file descriptors to enter existing namespace.
-    ///
-    /// # Panics
-    /// 
-    /// Generally speaking, Wrap will execute `setns(2)` 
-    /// and `clone(2)` (or `unshre(2)`, 
-    /// depending on the implementation detail) in the order 
-    /// you add call [`Self::nsenter()`] or [`Self::add_namespace()`]. 
-    /// 
-    /// Child can enter a existing namespace and create 
-    /// new namespace in it (making nested namespace), but it makes no sense 
-    /// to enter a namespace inside a new namespace.
-    /// So this method will panic.
-    /// 
-    /// ```should_panic
-    /// use nswrap::{Wrap,config};
-    /// let mut w = Wrap::new();
-    /// w.unshare(config::NamespaceType::Cgroup);
-    /// w.nsenter(config::NamespaceType::Cgroup, 114);
-    /// ```
-    ///
-    /// Use `self.unshare()` if you only want new namespace.
-    pub fn add_namespace(&mut self, ns: config::Namespace) -> &mut Self {
-        if ns.fd().is_some() {
-            match self.namespaces.back() {
-                Some(n) => match n.fd() {
-                    Some(_) => (),
-                    None => panic!("Method misuse!"),
-                },
-                None => (),
-            }
+    fn add_namespace(
+        &mut self,
+        typ: config::NamespaceType,
+        ns: config::NamespaceItem,
+    ) -> &mut Self {
+        let mut set;
+        match ns {
+            config::NamespaceItem::None => return self,
+            config::NamespaceItem::Unshare => set = &mut self.namespace_unshare,
+            config::NamespaceItem::Enter(_) => set = &mut self.namespace_nsenter,
         }
-
-        self.namespaces.push_back(ns);
-        self
+        match typ {
+            config::NamespaceType::Mount => set.mount = ns,
+            config::NamespaceType::Cgroup => set.cgroup = ns,
+            config::NamespaceType::Uts => set.uts = ns,
+            config::NamespaceType::Ipc => set.ipc = ns,
+            config::NamespaceType::User => set.user = ns,
+            config::NamespaceType::Pid => set.pid = ns,
+            config::NamespaceType::Network => set.network = ns,
+            config::NamespaceType::Time => unimplemented!(),
+        }
+        return self;
     }
 
     /// Set the program that will be executed.
     ///
     /// If the user only wants to execute the callback functions,
     /// this function does not have to be called.
-    pub fn set_process(&mut self, proc: config::Process) -> &mut Self {
+    fn set_process(&mut self, proc: config::Process) -> &mut Self {
         self.process = Some(proc);
         self
     }
 
-    pub fn set_root(&mut self, root: config::Root) -> &mut Self {
+    fn set_root(&mut self, root: config::Root) -> &mut Self {
         self.root = Some(root);
         self
     }
 
     /// Add mount point
-    pub fn add_mount(&mut self, mnt: config::Mount) -> &mut Self {
+    fn add_mount(&mut self, mnt: config::Mount) -> &mut Self {
         self.mounts.push(mnt);
         self
     }
 
     /// Add uidmap
-    pub fn add_uid_map(&mut self, id_map: config::IdMap) -> &mut Self {
+    fn add_uid_map(&mut self, id_map: config::IdMap) -> &mut Self {
         self.uid_maps.push(id_map);
         self
     }
     /// Add gidmap
-    pub fn add_gid_map(&mut self, id_map: config::IdMap) -> &mut Self {
+    fn add_gid_map(&mut self, id_map: config::IdMap) -> &mut Self {
         self.gid_maps.push(id_map);
         self
     }
@@ -392,14 +382,7 @@ mod tests {
             .sandbox_mnt(true)
             .id_map_preset(config::IdMapPreset::Current);
         let ret = wrap.spawn().unwrap().wait().unwrap().code().unwrap();
+        wrap.spawn();
         assert_eq!(32, ret);
-    }
-
-    #[test]
-    #[should_panic]
-    fn misuse_add_namespace() {
-        let mut w = Wrap::new();
-        w.unshare(config::NamespaceType::Cgroup);
-        w.nsenter(config::NamespaceType::Cgroup, 114);
     }
 }

@@ -15,23 +15,24 @@ pub enum NamespaceType {
     Time,
 }
 
-#[derive(Builder, Getters, Setters, CopyGetters, Default, Clone)]
-/// LinuxNamespace is the configuration for a Linux namespace.
-pub struct Namespace {
-    #[getset(get_copy = "pub", set = "pub")]
-    /// Type is the type of namespace.
-    pub(crate) typ: NamespaceType,
-
-    #[getset(get = "pub", set = "pub")]
-    /// Path is a path to an existing namespace persisted on disk that can
-    /// be joined and is of the same type
-    pub(crate) fd: Option<std::os::fd::RawFd>,
+#[derive(Default, Clone, Copy)]
+pub enum NamespaceItem {
+    #[default]
+    None,
+    Unshare,
+    Enter(std::os::fd::RawFd),
 }
 
-impl Namespace {
-    pub fn new(typ: NamespaceType) -> Self {
-        Self { typ, fd: None }
-    }
+#[derive(Getters, Setters, CopyGetters, Default, Clone)]
+pub struct NamespaceSet {
+    pub(crate) user: NamespaceItem,
+    pub(crate) mount: NamespaceItem,
+    pub(crate) cgroup: NamespaceItem,
+    pub(crate) uts: NamespaceItem,
+    pub(crate) ipc: NamespaceItem,
+    pub(crate) pid: NamespaceItem,
+    pub(crate) network: NamespaceItem,
+    //pub(crate) time: NamespaceItem,
 }
 
 #[derive(Builder, Getters, Setters, CopyGetters, Default, Clone)]
