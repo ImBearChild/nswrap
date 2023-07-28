@@ -71,7 +71,7 @@ impl<'a> Wrap<'a> {
 
     /// Executes the callbacks and program in a child process,
     /// returning a handle to it.
-    /// 
+    ///
     /// This instance of Wrap will not be consumed, but it's
     /// queue of callback functions will be empty.
     pub fn spawn(&mut self) -> Result<Child, Error> {
@@ -360,15 +360,9 @@ mod tests {
     }
 
     #[test]
-    fn tmpfs_root() {
+    fn tmpfs_root_sandbox_mnt() {
         let cb = || {
-            use config::NamespaceType;
             use std::path::Path;
-            let mut v = Vec::new();
-            v.push(NamespaceType::Mount);
-            util::unshare(v).unwrap();
-            let mut flags = nix::mount::MsFlags::empty();
-            nix::mount::mount(Some(""), "/", Some("tmpfs"), flags, Some("")).unwrap();
             let p = Path::new("/bin/sh");
             match p.exists() {
                 true => return 16,
@@ -379,10 +373,10 @@ mod tests {
         let wrap = binding
             .callback(cb)
             .unshare(config::NamespaceType::User)
+            .unshare(config::NamespaceType::Mount)
             .sandbox_mnt(true)
             .id_map_preset(config::IdMapPreset::Current);
         let ret = wrap.spawn().unwrap().wait().unwrap().code().unwrap();
-        wrap.spawn();
         assert_eq!(32, ret);
     }
 }
