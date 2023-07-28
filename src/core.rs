@@ -65,7 +65,7 @@ impl WrapCore<'_> {
     pub(crate) fn spwan(mut self) -> Result<Child, Error> {
         let mut p: Box<[u8; STACK_SIZE]> = Box::new([0; STACK_SIZE]);
 
-        let pid = match crate::util::clone(
+        let pid = match unsafe { crate::util::clone(
             Box::new(move || -> isize {
                 unsafe { IS_CHILD = true };
 
@@ -74,7 +74,7 @@ impl WrapCore<'_> {
             &mut *p,
             util::CloneFlags::empty(),
             Some(libc::SIGCHLD),
-        ) {
+        ) } {
             Ok(it) => it,
             Err(e) => return Err(e),
         };

@@ -1,4 +1,3 @@
-extern crate nix;
 use crate::error::Error;
 use bitflags::bitflags;
 use libc::c_int;
@@ -46,30 +45,40 @@ bitflags! {
     }
 }
 
-pub fn  clone<F>(
-    cb: F,
+/// Type for the function executed by [`clone`].
+pub type CloneCb<'a> = Box<dyn FnMut() -> isize + 'a>;
+
+/// `clone` create a child process
+/// ([`clone(2)`](https://man7.org/linux/man-pages/man2/clone.2.html))
+///
+/// `stack` is a reference to an array which will hold the stack of the new
+/// process.  Unlike when calling `clone(2)` from C, the provided stack
+/// address need not be the highest address of the region.  Nix will take
+/// care of that requirement.  The user only needs to provide a reference to
+/// a normally allocated buffer.
+pub unsafe fn clone(
+    mut cb: CloneCb,
     stack: &mut [u8],
     flags: CloneFlags,
     signal: Option<c_int>,
-) -> Result<u32, Error>
-where
-    F: FnOnce() -> isize,
-{
-    // box the closure data
-    let bf = Box::new(cb);
-    // leave it on the heap
-    let p = Box::into_raw(bf) as *mut libc::c_void;
-    let combined = flags.bits() as i32 | signal.unwrap_or(0);
+) -> Result<u32,Error> {
+    extern "C" fn callback(data: *mut CloneCb) -> c_int {
+        let cb: &mut CloneCb = unsafe { &mut *data };
+        (*cb)() as c_int
+    }
+
     let res = unsafe {
+        let combined = {flags.bits() as i32} | signal.unwrap_or(0);
         let ptr = stack.as_mut_ptr().add(stack.len());
         let ptr_aligned = ptr.sub(ptr as usize % 16);
         libc::clone(
-            std::mem::transmute(p),
+            std::mem::transmute(callback as extern "C" fn(*mut Box<dyn FnMut() -> isize>) -> i32),
             ptr_aligned as *mut libc::c_void,
             combined,
-            0 as *mut libc::c_void,
+            &mut cb as *mut _ as *mut libc::c_void,
         )
     };
+
     if res == -1 {
         Err({ Error::OsErrno(unsafe {
             *libc::__errno_location().clone()
