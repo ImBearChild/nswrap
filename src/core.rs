@@ -9,7 +9,7 @@ use std::{
 
 use crate::{config, util, Child, Error};
 use getset::{CopyGetters, Getters, Setters};
-use nix::sched::CloneFlags;
+use crate::util::CloneFlags;
 
 /// Default stack size
 ///
@@ -85,33 +85,33 @@ impl WrapCore<'_> {
     }
 
     pub(crate) fn apply_nsenter(&mut self) {
-        Self::apply_namespace_item(self.namespace_nsenter.user, CloneFlags::CLONE_NEWUSER);
-        Self::apply_namespace_item(self.namespace_nsenter.mount, CloneFlags::CLONE_NEWNS);
-        Self::apply_namespace_item(self.namespace_nsenter.cgroup, CloneFlags::CLONE_NEWCGROUP);
-        Self::apply_namespace_item(self.namespace_nsenter.uts, CloneFlags::CLONE_NEWUTS);
-        Self::apply_namespace_item(self.namespace_nsenter.ipc, CloneFlags::CLONE_NEWIPC);
-        Self::apply_namespace_item(self.namespace_nsenter.pid, CloneFlags::CLONE_NEWPID);
-        Self::apply_namespace_item(self.namespace_nsenter.network, CloneFlags::CLONE_NEWNET);
+        Self::apply_namespace_item(self.namespace_nsenter.user, CloneFlags::NEWUSER);
+        Self::apply_namespace_item(self.namespace_nsenter.mount, CloneFlags::NEWNS);
+        Self::apply_namespace_item(self.namespace_nsenter.cgroup, CloneFlags::NEWCGROUP);
+        Self::apply_namespace_item(self.namespace_nsenter.uts, CloneFlags::NEWUTS);
+        Self::apply_namespace_item(self.namespace_nsenter.ipc, CloneFlags::NEWIPC);
+        Self::apply_namespace_item(self.namespace_nsenter.pid, CloneFlags::NEWPID);
+        Self::apply_namespace_item(self.namespace_nsenter.network, CloneFlags::NEWNET);
     }
 
     pub(crate) fn apply_unshare(&mut self) {
-        Self::apply_namespace_item(self.namespace_unshare.user, CloneFlags::CLONE_NEWUSER);
-        Self::apply_namespace_item(self.namespace_unshare.mount, CloneFlags::CLONE_NEWNS);
-        Self::apply_namespace_item(self.namespace_unshare.cgroup, CloneFlags::CLONE_NEWCGROUP);
-        Self::apply_namespace_item(self.namespace_unshare.uts, CloneFlags::CLONE_NEWUTS);
-        Self::apply_namespace_item(self.namespace_unshare.ipc, CloneFlags::CLONE_NEWIPC);
-        Self::apply_namespace_item(self.namespace_unshare.pid, CloneFlags::CLONE_NEWPID);
-        Self::apply_namespace_item(self.namespace_unshare.network, CloneFlags::CLONE_NEWNET);
+        Self::apply_namespace_item(self.namespace_unshare.user, CloneFlags::NEWUSER);
+        Self::apply_namespace_item(self.namespace_unshare.mount, CloneFlags::NEWNS);
+        Self::apply_namespace_item(self.namespace_unshare.cgroup, CloneFlags::NEWCGROUP);
+        Self::apply_namespace_item(self.namespace_unshare.uts, CloneFlags::NEWUTS);
+        Self::apply_namespace_item(self.namespace_unshare.ipc, CloneFlags::NEWIPC);
+        Self::apply_namespace_item(self.namespace_unshare.pid, CloneFlags::NEWPID);
+        Self::apply_namespace_item(self.namespace_unshare.network, CloneFlags::NEWNET);
     }
 
     fn apply_namespace_item(ns: config::NamespaceItem, flag: CloneFlags) {
         match ns {
             config::NamespaceItem::None => (),
             config::NamespaceItem::Unshare => {
-                nix::sched::unshare(flag).unwrap();
+                crate::util::unshare(flag).unwrap();
             }
             config::NamespaceItem::Enter(fd) => {
-                nix::sched::setns(fd, flag).unwrap();
+                crate::util::setns(fd, flag).unwrap();
             }
         }
     }

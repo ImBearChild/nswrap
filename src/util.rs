@@ -5,6 +5,7 @@ use linux_raw_sys::general::{
     CLONE_FILES, CLONE_FS, CLONE_NEWCGROUP, CLONE_NEWIPC, CLONE_NEWNET, CLONE_NEWNS, CLONE_NEWPID,
     CLONE_NEWTIME, CLONE_NEWUSER, CLONE_NEWUTS, CLONE_SYSVSEM,
 };
+use std::os::fd::RawFd;
 
 pub fn get_uid() -> u32 {
     nix::unistd::Uid::current().into()
@@ -27,7 +28,7 @@ bitflags! {
         /// `CLONE_FS`.
         const FS = CLONE_FS;
         /// `CLONE_NEWCGROUP`.
-        const NWCGROUP = CLONE_NEWCGROUP;
+        const NEWCGROUP = CLONE_NEWCGROUP;
         /// `CLONE_NEWIPC`.
         const NEWIPC = CLONE_NEWIPC;
         /// `CLONE_NEWNET`.
@@ -42,6 +43,34 @@ bitflags! {
         const NEWUSER = CLONE_NEWUSER;
         /// `CLONE_SYSVSEM`.
         const SYSVSEM = CLONE_SYSVSEM;
+        /// `CLONE_NEWUTS`
+        const NEWUTS = CLONE_NEWUTS;
+    }
+}
+
+/// disassociate parts of the process execution context
+///
+/// See also [unshare(2)](https://man7.org/linux/man-pages/man2/unshare.2.html)
+pub fn unshare(flags: CloneFlags) -> Result<(), Error> {
+    let res = unsafe { libc::unshare(flags.bits() as i32) };
+
+    if res == -1 {
+        Err(Error::OsErrno(unsafe { *libc::__errno_location().clone() }))
+    } else {
+        Ok(())
+    }
+}
+
+/// reassociate thread with a namespace
+///
+/// See also [setns(2)](https://man7.org/linux/man-pages/man2/setns.2.html)
+pub fn setns(fd: RawFd, nstype: CloneFlags) -> Result<(), Error> {
+    let res = unsafe { libc::setns(fd, nstype.bits() as i32) };
+
+    if res == -1 {
+        Err(Error::OsErrno(unsafe { *libc::__errno_location().clone() }))
+    } else {
+        Ok(())
     }
 }
 
@@ -61,14 +90,14 @@ pub unsafe fn clone(
     stack: &mut [u8],
     flags: CloneFlags,
     signal: Option<c_int>,
-) -> Result<u32,Error> {
+) -> Result<u32, Error> {
     extern "C" fn callback(data: *mut CloneCb) -> c_int {
         let cb: &mut CloneCb = unsafe { &mut *data };
         (*cb)() as c_int
     }
 
     let res = unsafe {
-        let combined = {flags.bits() as i32} | signal.unwrap_or(0);
+        let combined = { flags.bits() as i32 } | signal.unwrap_or(0);
         let ptr = stack.as_mut_ptr().add(stack.len());
         let ptr_aligned = ptr.sub(ptr as usize % 16);
         libc::clone(
@@ -80,10 +109,27 @@ pub unsafe fn clone(
     };
 
     if res == -1 {
-        Err({ Error::OsErrno(unsafe {
-            *libc::__errno_location().clone()
-        }) })
+        Err(Error::OsErrno(unsafe { *libc::__errno_location().clone() }))
     } else {
         Ok(res as u32)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::util::{unshare, CloneFlags};
+
+
+    #[test]
+    fn correctly_return_os_error() {
+        use std::thread;
+
+        let thread_join_handle = thread::spawn(move || {
+            unshare(CloneFlags::NEWUSER).unwrap_err()
+        });
+        match thread_join_handle.join().unwrap() {
+            crate::error::Error::OsErrno(num) => assert_eq!(22, num),
+            _ => panic!(),
+        }
     }
 }

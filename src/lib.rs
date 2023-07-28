@@ -374,7 +374,7 @@ mod tests {
         assert_eq!(16, ret);
     }
 
-    //#[test]
+    #[test]
     fn callback_return_value_in_thread() {
         use std::thread;
 
@@ -393,6 +393,7 @@ mod tests {
 
     /// https://github.com/rust-lang/rust/issues/79740
     #[test]
+    #[should_panic]
     fn panic_in_thread() {
         use std::thread;
 
@@ -400,10 +401,11 @@ mod tests {
             let cb = || panic!();
             let mut wrap = Wrap::new();
             wrap.callback(cb).unshare(config::NamespaceType::User);
-            let ret = wrap.spawn().unwrap().wait().unwrap();
-            println!("{:?}", ret.wait_status)
+            let ret = wrap.status().unwrap();
+            ret
+            // println!("{:?}", ret.wait_status)
         });
-        thread_join_handle.join();
+        assert_eq!(thread_join_handle.join().unwrap().success(),true)
     }
 
     #[test]
