@@ -7,9 +7,9 @@ use std::{
     os::{fd::IntoRawFd, unix::prelude::OsStrExt},
 };
 
+use crate::util::CloneFlags;
 use crate::{config, util, Child, Error};
 use getset::{CopyGetters, Getters, Setters};
-use crate::util::CloneFlags;
 
 /// Default stack size
 ///
@@ -65,16 +65,18 @@ impl WrapCore<'_> {
     pub(crate) fn spwan(mut self) -> Result<Child, Error> {
         let mut p: Box<[u8; STACK_SIZE]> = Box::new([0; STACK_SIZE]);
 
-        let pid = match unsafe { crate::util::clone(
-            Box::new(move || -> isize {
-                unsafe { IS_CHILD = true };
+        let pid = match unsafe {
+            crate::util::clone(
+                Box::new(move || -> isize {
+                    unsafe { IS_CHILD = true };
 
-                self.run_child()
-            }),
-            &mut *p,
-            util::CloneFlags::empty(),
-            Some(libc::SIGCHLD),
-        ) } {
+                    self.run_child()
+                }),
+                &mut *p,
+                util::CloneFlags::empty(),
+                Some(libc::SIGCHLD),
+            )
+        } {
             Ok(it) => it,
             Err(e) => return Err(e),
         };
@@ -126,7 +128,7 @@ impl WrapCore<'_> {
             content.push(" ");
             content.push(format!("{}\n", i.size()));
         }
-        nix::unistd::write(file.into_raw_fd(), content.as_bytes()).unwrap();
+        rustix::io::write(file, content.as_bytes()).unwrap();
     }
 
     pub(crate) fn set_id_map(&self) {
@@ -139,7 +141,7 @@ impl WrapCore<'_> {
             .write(true)
             .open(format!("/proc/{}/setgroups", pid))
             .unwrap();
-        nix::unistd::write(file.into_raw_fd(), b"deny").unwrap();
+        rustix::io::write(file, b"deny").unwrap();
 
         Self::write_id_map(format!("/proc/{}/gid_map", pid), &self.uid_maps);
     }
@@ -157,29 +159,30 @@ impl WrapCore<'_> {
     /// Due to kernel bug#183461 ,this can only be called after setup uid
     /// and gid mapping.
     pub(crate) fn set_up_tmpfs_cwd(&self) {
-        use nix::mount::{mount, MsFlags};
         use nix::unistd::pivot_root;
+        use rustix::fs::change_mount;
+        use rustix::fs::mount;
+        use rustix::fs::MountFlags;
+        use rustix::fs::MountPropagationFlags;
         use std::env::set_current_dir;
         use std::fs::DirBuilder;
         use std::os::unix::fs::DirBuilderExt;
 
         let tmp_path = "/tmp";
         //
-        mount(
-            Some(""),
+        change_mount(
             "/",
-            Some(""),
-            MsFlags::MS_SILENT | MsFlags::MS_SLAVE | MsFlags::MS_REC,
-            Some(""),
+            MountPropagationFlags::SLAVE | MountPropagationFlags::REC,
+            // TODO: Fix MountPropagationFlags::SILENT
         )
         .unwrap();
 
         mount(
-            Some("tmpfs"),
+            "tmpfs",
             tmp_path,
-            Some("tmpfs"),
-            MsFlags::MS_NODEV | MsFlags::MS_NOSUID,
-            Some(""),
+            "tmpfs",
+            MountFlags::NODEV | MountFlags::NOSUID,
+            "",
         )
         .unwrap();
 
@@ -190,15 +193,15 @@ impl WrapCore<'_> {
         dir.create("/tmp/newroot").unwrap();
         dir.create("oldroot").unwrap();
         mount(
-            Some("newroot"),
             "newroot",
-            Some(""),
-            MsFlags::MS_SILENT | MsFlags::MS_MGC_VAL | MsFlags::MS_BIND | MsFlags::MS_REC,
-            Some(""),
+            "newroot",
+            "",
+            MountFlags::SILENT | MountFlags::BIND | MountFlags::REC,
+            "",
         )
         .unwrap();
 
-        pivot_root(tmp_path, "oldroot").unwrap();
+        pivot_root(tmp_path, "oldroot").unwrap(); // todo: Clean this!
     }
 }
 

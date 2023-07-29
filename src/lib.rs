@@ -321,9 +321,10 @@ impl ExitStatus {
 #[cfg(test)]
 mod tests {
 
-    use nix::sched::CloneFlags;
+    use rustix::fd::{FromRawFd, OwnedFd};
 
     use super::*;
+
     const _TMP_DIR: &str = "/tmp/nswrap.test/";
     const _TMP_DIR1: &str = "/tmp/nswrap.test/test-1";
     const _TMP_DIR2: &str = "/tmp/nswrap.test/test-2";
@@ -344,10 +345,8 @@ mod tests {
         make_test_dir();
         let cb = || {
             use std::fs::File;
-            nix::sched::unshare(CloneFlags::CLONE_NEWNS).unwrap();
-            let mut flags = nix::mount::MsFlags::empty();
-            flags.set(nix::mount::MsFlags::MS_BIND, true);
-            nix::mount::mount(Some(_TMP_DIR1), _TMP_DIR2, Some(""), flags, Some("")).unwrap();
+            util::unshare(util::CloneFlags::NEWNS).unwrap();
+            rustix::fs::mount(_TMP_DIR1, _TMP_DIR2, "", rustix::fs::MountFlags::BIND, "").unwrap();
             let mut file = File::create(_TMP_DIR2.to_owned() + "/foo.txt").unwrap();
             std::io::Write::write_all(&mut file, b"Hello, world!").unwrap();
             return 0;
@@ -405,7 +404,7 @@ mod tests {
             ret
             // println!("{:?}", ret.wait_status)
         });
-        assert_eq!(thread_join_handle.join().unwrap().success(),true)
+        assert_eq!(thread_join_handle.join().unwrap().success(), true)
     }
 
     #[test]
@@ -431,12 +430,11 @@ mod tests {
 
     #[test]
     fn raw_child_pipe() {
-        use nix::fcntl::OFlag;
-        let (read_end, write_end) = nix::unistd::pipe2(OFlag::O_CLOEXEC).unwrap();
+        let (read_end, write_end) = rustix::pipe::pipe().unwrap();
         let cb = move || {
-            nix::unistd::close(read_end).unwrap();
-            nix::unistd::dup3(write_end, 16, OFlag::empty()).unwrap();
-            nix::unistd::write(16, b"16").unwrap();
+            let mut newfd = unsafe { OwnedFd::from_raw_fd(16) };
+            rustix::io::dup2(write_end, &mut newfd).unwrap(); // Old fd will be dropped!
+            rustix::io::write(newfd, b"16").unwrap();
             return 42;
         };
         let mut binding = Wrap::new();
@@ -447,11 +445,10 @@ mod tests {
             .sandbox_mnt(true)
             .id_map_preset(config::IdMapPreset::Current);
         let ret = wrap.spawn();
-        nix::unistd::close(write_end).unwrap();
         let ret = ret.unwrap().wait().unwrap().code().unwrap();
         assert_eq!(ret, 42);
         let mut buf: [u8; 2] = *b"00";
-        nix::unistd::read(read_end, &mut buf).unwrap();
+        rustix::io::read(read_end, &mut buf).unwrap();
         assert_eq!(buf, *b"16");
     }
 }

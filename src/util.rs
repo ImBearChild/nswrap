@@ -8,14 +8,14 @@ use linux_raw_sys::general::{
 use std::os::fd::RawFd;
 
 pub fn get_uid() -> u32 {
-    nix::unistd::Uid::current().into()
+    rustix::process::getuid().as_raw()
 }
 pub fn get_gid() -> u32 {
-    nix::unistd::Gid::current().into()
+    rustix::process::getgid().as_raw()
 }
 
 pub fn get_pid() -> i32 {
-    nix::unistd::Pid::this().into()
+    rustix::process::getpid().as_raw_nonzero().get()
 }
 
 bitflags! {
@@ -119,14 +119,11 @@ pub unsafe fn clone(
 mod test {
     use crate::util::{unshare, CloneFlags};
 
-
     #[test]
     fn correctly_return_os_error() {
         use std::thread;
 
-        let thread_join_handle = thread::spawn(move || {
-            unshare(CloneFlags::NEWUSER).unwrap_err()
-        });
+        let thread_join_handle = thread::spawn(move || unshare(CloneFlags::NEWUSER).unwrap_err());
         match thread_join_handle.join().unwrap() {
             crate::error::Error::OsErrno(num) => assert_eq!(22, num),
             _ => panic!(),
