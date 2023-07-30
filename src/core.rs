@@ -4,12 +4,12 @@ use std::{
     collections::VecDeque,
     ffi::{OsStr, OsString},
     fs::OpenOptions,
-    os::{fd::IntoRawFd, unix::prelude::OsStrExt},
+    os::unix::prelude::OsStrExt,
 };
 
 use crate::util::CloneFlags;
 use crate::{config, util, Child, Error};
-use getset::{CopyGetters, Getters, Setters};
+//use getset::{CopyGetters, Getters, Setters};
 
 /// Default stack size
 ///
@@ -22,8 +22,34 @@ static mut IS_CHILD: bool = false;
 /// Boxed closure to execute in child process
 pub type WrapCbBox<'a> = Box<dyn FnOnce() -> isize + 'a>;
 
+impl crate::Wrap<'_> {
+    pub(crate) fn spawn_inner(mut wrap: WrapInner) -> Result<Child, Error> {
+        let mut p: Box<[u8; STACK_SIZE]> = Box::new([0; STACK_SIZE]);
+
+        let pid = match unsafe {
+            crate::util::clone(
+                Box::new(move || -> isize {
+                    IS_CHILD = true;
+
+                    wrap.run_child()
+                }),
+                &mut *p,
+                util::CloneFlags::empty(),
+                Some(libc::SIGCHLD),
+            )
+        } {
+            Ok(it) => it,
+            Err(e) => return Err(e),
+        };
+
+        Ok(Child {
+            pid: unsafe { rustix::process::Pid::from_raw_unchecked(pid.try_into().unwrap()) },
+        })
+    }
+}
+
 //#[derive(Getters, Setters, CopyGetters, Default)]
-pub(crate) struct WrapCore<'a> {
+pub(crate) struct WrapInner<'a> {
     pub(crate) process: Option<config::Process>,
     pub(crate) root: Option<config::Root>,
 
@@ -38,7 +64,7 @@ pub(crate) struct WrapCore<'a> {
     pub(crate) sandbox_mnt: bool,
 }
 
-impl WrapCore<'_> {
+impl WrapInner<'_> {
     fn run_child(&mut self) -> isize {
         unsafe {
             if IS_CHILD != true {
@@ -60,30 +86,6 @@ impl WrapCore<'_> {
         }
 
         self.execute_callbacks()
-    }
-
-    pub(crate) fn spwan(mut self) -> Result<Child, Error> {
-        let mut p: Box<[u8; STACK_SIZE]> = Box::new([0; STACK_SIZE]);
-
-        let pid = match unsafe {
-            crate::util::clone(
-                Box::new(move || -> isize {
-                    unsafe { IS_CHILD = true };
-
-                    self.run_child()
-                }),
-                &mut *p,
-                util::CloneFlags::empty(),
-                Some(libc::SIGCHLD),
-            )
-        } {
-            Ok(it) => it,
-            Err(e) => return Err(e),
-        };
-
-        Ok(Child {
-            pid: unsafe { rustix::process::Pid::from_raw_unchecked(pid.try_into().unwrap()) },
-        })
     }
 
     pub(crate) fn apply_nsenter(&mut self) {
@@ -154,10 +156,12 @@ impl WrapCore<'_> {
         return ret;
     }
 
-    /// Crate tmpfs as root, simulate brwrap's behaviour
-    ///
-    /// Due to kernel bug#183461 ,this can only be called after setup uid
-    /// and gid mapping.
+    /**
+    Create tmpfs as root, simulate brwrap's behaviour.
+
+    Due to kernel bug#183461 ,this can only be called after setup uid
+    and gid mapping.
+    */
     pub(crate) fn set_up_tmpfs_cwd(&self) {
         use nix::unistd::pivot_root;
         use rustix::fs::change_mount;

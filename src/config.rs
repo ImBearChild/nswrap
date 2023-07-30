@@ -67,7 +67,7 @@ pub struct Process {
     user: Option<User>,
 
     #[getset(get = "pub", set = "pub")]
-    pub(crate) bin: OsString,
+    bin: OsString,
 
     #[getset(get = "pub", set = "pub")]
     /// Args specifies the arguments for the application to
@@ -76,7 +76,12 @@ pub struct Process {
 
     #[getset(get = "pub", set = "pub")]
     /// Env populates the process environment for the process.
-    env: Option<Vec<String>>,
+    env: Vec<Option<OsString>>,
+
+    #[getset(get = "pub", set = "pub")]
+    /// Prevent the spawned child process from inheriting 
+    /// any environment variable from its parent process.
+    env_no_inheriting: bool,
 
     #[getset(get = "pub", set = "pub")]
     /// Cwd is the current working directory for the process and must be

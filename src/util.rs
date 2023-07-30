@@ -1,3 +1,4 @@
+#![deny(unsafe_op_in_unsafe_fn)]
 use crate::error::Error;
 use bitflags::bitflags;
 use libc::c_int;

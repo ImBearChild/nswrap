@@ -1,12 +1,15 @@
-//! This crate is aiming at providing an friendly interface
-//! of linux container technologies. These technologies includes
-//! system calls like `namespaces(7)` and `clone(2)`.
-//! It can be use as a low-level library to configure and
-//! execute program and closure inside linux containers.
-//!
-//! The `Wrap` follows a similar builder pattern to std::process::Command.
-//! In addition `Wrap` contains methods to configure linux
-//! namespaces, chroots and more part specific to linux.
+/*!
+This crate is aiming at providing an friendly interface
+of linux container technologies.
+These technologies include system calls like `namespaces(7)` and `clone(2)`.
+It can be use as a low-level library to configure and
+execute program and closure inside linux containers.
+
+The `Wrap` follows a similar builder pattern to std::process::Command.
+In addition, `Wrap` contains methods to configure linux namespaces,
+chroots, mount points, and more part specific to linux.
+ */
+#![deny(unsafe_op_in_unsafe_fn)]
 #[macro_use]
 extern crate derive_builder;
 use getset::{CopyGetters, Getters, Setters};
@@ -56,7 +59,7 @@ pub struct ExitStatus {
 
 /// Core implementation
 impl<'a> Wrap<'a> {
-    /// Create a new instance with defualt.
+    /// Create a new instance with default.
     pub fn new() -> Self {
         Default::default()
     }
@@ -76,7 +79,7 @@ impl<'a> Wrap<'a> {
     /// This instance of Wrap will not be consumed, but it's
     /// queue of callback functions will be empty.
     pub fn spawn(&mut self) -> Result<Child, Error> {
-        let mut wrapcore = core::WrapCore {
+        let mut wrapcore = core::WrapInner {
             process: self.process.clone(),
             root: self.root.clone(),
             mounts: self.mounts.clone(),
@@ -88,7 +91,7 @@ impl<'a> Wrap<'a> {
             sandbox_mnt: self.sandbox_mnt.clone(),
         };
         wrapcore.callbacks.append(&mut self.callbacks);
-        wrapcore.spwan()
+        Self::spawn_inner(wrapcore)
     }
 
     /// Executes the command and callback functions in a child process,
@@ -99,33 +102,44 @@ impl<'a> Wrap<'a> {
         self.spawn()?.wait()
     }
 
-    /// Add a callback to run in the child before execute the program.
-    ///
-    /// This function can be called multiple times, all functions will be
-    /// called after `clone(2)` and environment setup, in the same order
-    /// as they were added.
-    /// The return value of last function can be retrieved
-    /// from `ExitStatus` if no `program` is executed.
-    ///
-    /// # Notes and Safety
-    ///
-    /// This closure will be run in the context of the child process after a
-    /// `clone(2)`. This primarily means that any modifications made to
-    /// memory on behalf of this closure will **not** be visible to the
-    /// parent process.
-    ///
-    /// For further details on this topic, please refer to the
-    /// [Rust Std Lib Dcoument], related [github issue of nix library],
-    /// [github issue of rust]
-    /// and the equivalent documentation for any targeted
-    /// platform, especially the requirements around *async-signal-safety*.
-    ///
-    /// [Rust Std Lib Dcoument]:
-    ///     https://doc.rust-lang.org/std/os/unix/process/trait.CommandExt.html#tymethod.pre_exec
-    /// [github issue of nix library]:
-    ///     https://github.com/nix-rust/nix/issues/360#issuecomment-359271308
-    /// [github issue of rust]:
-    ///     https://github.com/rust-lang/rust/issues/39575
+    /**
+    Add a callback to run in the child before execute the program.
+
+    This function can be called multiple times, all functions will be
+    called after `clone(2)` and environment setup, in the same order
+    as they were added.
+    The return value of last function can be retrieved
+    from `ExitStatus` if no `program` is executed.
+
+    # Notes and Safety
+
+    This closure will be run in the context of the child process after a
+    `clone(2)`. This primarily means that any modifications made to
+    memory on behalf of this closure will **not** be visible to the
+    parent process. 
+
+    This method will not cause memory corruption, 
+    but it will be risky when interact with thread-related components. 
+    For example, it's possible to create a deadlock using `std::sync::Mutex`.
+    Because `clone(2)` clone whole process,
+    they do not share any modified memory area. 
+    Child process is not thread, and should not be threat like thread.
+
+    Use `pipe(2)` or other IPC method to communicate with child process.
+
+    For further details on this topic, please refer to the
+    [Rust Std Lib Document], related [GitHub issue of nix library],
+    [GitHub issue of rust]
+    and the equivalent documentation for any targeted
+    platform, especially the requirements around *async-signal-safety*.
+
+    [Rust Std Lib Document]:
+        https://doc.rust-lang.org/std/os/unix/process/trait.CommandExt.html#tymethod.pre_exec
+    [GitHub issue of nix library]:
+        https://github.com/nix-rust/nix/issues/360#issuecomment-359271308
+    [GitHub issue of rust]:
+        https://github.com/rust-lang/rust/issues/39575
+    */
     pub fn callback<F>(&mut self, cb: F) -> &mut Self
     where
         F: FnOnce() -> isize + Send + 'static,
@@ -352,7 +366,7 @@ mod tests {
             return 0;
         };
         let mut wrap = Wrap::new();
-        wrap.callback(cb).unshare(config::NamespaceType::User);
+        unsafe { wrap.callback(cb).unshare(config::NamespaceType::User) };
         wrap.spawn().unwrap().wait().unwrap();
 
         // Check Result
