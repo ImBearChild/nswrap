@@ -1,4 +1,5 @@
 use getset::{CopyGetters, Getters, Setters};
+use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::PathBuf;
 
@@ -76,17 +77,23 @@ pub struct Process {
 
     #[getset(get = "pub", set = "pub")]
     /// Env populates the process environment for the process.
-    pub(crate) env: Vec<Option<OsString>>,
+    pub(crate) env: HashMap<OsString,EnvVarItem>,
 
     #[getset(get = "pub", set = "pub")]
-    /// Prevent the spawned child process from inheriting 
+    /// Prevent the spawned child process from inheriting
     /// any environment variable from its parent process.
     pub(crate) env_no_inheriting: bool,
 
     #[getset(get = "pub", set = "pub")]
     /// Cwd is the current working directory for the process and must be
     /// relative to the container's root.
-    pub(crate) cwd: PathBuf,
+    pub(crate) cwd: Option<PathBuf>,
+}
+
+#[derive(Clone)]
+pub enum EnvVarItem {
+    Set(OsString),
+    Clean,
 }
 
 #[derive(Builder, Getters, Setters, CopyGetters, Default, Clone)]

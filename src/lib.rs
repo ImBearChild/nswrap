@@ -18,6 +18,7 @@ use std::{
     collections::VecDeque,
     ffi::{OsStr, OsString},
     os::{fd::RawFd, unix::process::ExitStatusExt},
+    path::Path,
 };
 pub mod config;
 pub mod core;
@@ -98,6 +99,55 @@ impl<'a> Wrap<'a> {
         for arg in args {
             self.arg(arg.as_ref());
         }
+        self
+    }
+
+    /// Set
+    pub fn current_dir<P: AsRef<Path>>(&mut self, dir: P) -> &mut Self {
+        self.process.cwd = Some(std::path::PathBuf::new().join(dir.as_ref()));
+        self
+    }
+
+    /// Inserts or updates an explicit environment variable mapping.
+    pub fn env<K, V>(&mut self, key: K, val: V) -> &mut Self
+    where
+        K: AsRef<OsStr>,
+        V: AsRef<OsStr>,
+    {
+        self.process.env.insert(
+            key.as_ref().into(),
+            config::EnvVarItem::Set(val.as_ref().into()),
+        );
+        self
+    }
+
+    /// Inserts or updates multiple explicit environment variable mappings.
+    pub fn envs<I, K, V>(&mut self, vars: I) -> &mut Self
+    where
+        I: IntoIterator<Item = (K, V)>,
+        K: AsRef<OsStr>,
+        V: AsRef<OsStr>,
+    {
+        for (ref key, ref val) in vars {
+            self.env(key, val);
+        }
+        self
+    }
+
+    /// Removes an explicitly set environment variable and prevents inheriting
+    /// it from a parent process.
+    pub fn env_remove<K: AsRef<OsStr>>(&mut self, key: K) -> &mut Self {
+        self.process
+            .env
+            .insert(key.as_ref().into(), config::EnvVarItem::Clean);
+        self
+    }
+
+    /// Clears all explicitly set environment variables and prevents
+    /// inheriting any parent process environment variables.
+    pub fn env_clear(&mut self) -> &mut Self {
+        self.process.env.clear();
+        self.process.env_no_inheriting = true;
         self
     }
 
@@ -361,7 +411,4 @@ impl ExitStatus {
 }
 
 #[cfg(test)]
-mod tests {
-
-
-}
+mod tests {}
