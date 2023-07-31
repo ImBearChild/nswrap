@@ -72,7 +72,7 @@ impl WrapInner<'_> {
             self.set_up_tmpfs_cwd();
         }
 
-        let mut ret = self.execute_callbacks();
+        let ret = self.execute_callbacks();
 
         if !self.process.bin.is_empty() {
             self.execute_process(); // exec ,no return
@@ -82,10 +82,33 @@ impl WrapInner<'_> {
     }
 
     pub(crate) fn execute_process(&mut self) {
-        use std::process::Command;
         use std::os::unix::process::CommandExt;
+        use std::process::Command;
+
         let mut cmd = Command::new(self.process.bin());
         cmd.args(self.process.args());
+
+        match &self.process.cwd {
+            Some(cwd) => {cmd.current_dir(cwd);},
+            None => (),
+        }
+
+        if self.process.env_no_inheriting {
+            //cmd.env_clear();
+        }
+
+        // Set up envvar
+        for (key, val) in &self.process.env {
+            match val {
+                config::EnvVarItem::Set(val) => {
+                    cmd.env(key, val);
+                }
+                config::EnvVarItem::Clean => {
+                    cmd.env_remove(key);
+                }
+            }
+        }
+
         cmd.exec();
     }
 
