@@ -16,9 +16,6 @@ use crate::{config, util, Child, Error};
 /// https://wiki.musl-libc.org/functional-differences-from-glibc.html
 const STACK_SIZE: usize = 122880;
 
-// preventing running some function outside the child process
-static mut IS_CHILD: bool = false;
-
 /// Boxed closure to execute in child process
 pub type WrapCbBox<'a> = Box<dyn FnOnce() -> isize + 'a>;
 
@@ -28,11 +25,7 @@ impl crate::Wrap<'_> {
 
         let pid = match unsafe {
             crate::util::clone(
-                Box::new(move || -> isize {
-                    IS_CHILD = true;
-
-                    wrap.run_child()
-                }),
+                Box::new(move || -> isize { wrap.run_child() }),
                 &mut *p,
                 util::CloneFlags::empty(),
                 Some(libc::SIGCHLD),
@@ -66,11 +59,6 @@ pub(crate) struct WrapInner<'a> {
 
 impl WrapInner<'_> {
     fn run_child(&mut self) -> isize {
-        unsafe {
-            if IS_CHILD != true {
-                panic!()
-            }
-        }
 
         self.apply_nsenter();
         self.apply_unshare();
