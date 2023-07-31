@@ -43,7 +43,7 @@ impl crate::Wrap<'_> {
 
 //#[derive(Getters, Setters, CopyGetters, Default)]
 pub(crate) struct WrapInner<'a> {
-    pub(crate) process: Option<config::Process>,
+    pub(crate) process: config::Process,
     pub(crate) root: Option<config::Root>,
 
     pub(crate) mounts: Vec<config::Mount>,
@@ -59,7 +59,6 @@ pub(crate) struct WrapInner<'a> {
 
 impl WrapInner<'_> {
     fn run_child(&mut self) -> isize {
-
         self.apply_nsenter();
         self.apply_unshare();
 
@@ -73,7 +72,21 @@ impl WrapInner<'_> {
             self.set_up_tmpfs_cwd();
         }
 
-        self.execute_callbacks()
+        let mut ret = self.execute_callbacks();
+
+        if !self.process.bin.is_empty() {
+            self.execute_process(); // exec ,no return
+        }
+
+        return ret;
+    }
+
+    pub(crate) fn execute_process(&mut self) {
+        use std::process::Command;
+        use std::os::unix::process::CommandExt;
+        let mut cmd = Command::new(self.process.bin());
+        cmd.args(self.process.args());
+        cmd.exec();
     }
 
     pub(crate) fn apply_nsenter(&mut self) {
@@ -202,6 +215,6 @@ mod test {
 
     #[test]
     fn test() {
-        crate::Wrap::new_cmd("/bin/sh");
+        crate::Wrap::new_program("/bin/sh");
     }
 }

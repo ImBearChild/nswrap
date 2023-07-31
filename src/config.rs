@@ -64,29 +64,29 @@ pub struct Mount {
 pub struct Process {
     #[getset(get = "pub", set = "pub")]
     /// User specifies user information for the process.
-    user: Option<User>,
+    pub(crate) user: Option<User>,
 
     #[getset(get = "pub", set = "pub")]
-    bin: OsString,
+    pub(crate) bin: OsString,
 
     #[getset(get = "pub", set = "pub")]
     /// Args specifies the arguments for the application to
     /// execute.
-    args: Vec<String>,
+    pub(crate) args: Vec<OsString>,
 
     #[getset(get = "pub", set = "pub")]
     /// Env populates the process environment for the process.
-    env: Vec<Option<OsString>>,
+    pub(crate) env: Vec<Option<OsString>>,
 
     #[getset(get = "pub", set = "pub")]
     /// Prevent the spawned child process from inheriting 
     /// any environment variable from its parent process.
-    env_no_inheriting: bool,
+    pub(crate) env_no_inheriting: bool,
 
     #[getset(get = "pub", set = "pub")]
     /// Cwd is the current working directory for the process and must be
     /// relative to the container's root.
-    cwd: PathBuf,
+    pub(crate) cwd: PathBuf,
 }
 
 #[derive(Builder, Getters, Setters, CopyGetters, Default, Clone)]

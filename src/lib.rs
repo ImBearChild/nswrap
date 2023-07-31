@@ -32,7 +32,7 @@ pub use crate::core::WrapCbBox;
 /// Main class of spawn process and execute functions.
 #[derive(Getters, Setters, CopyGetters, Default)]
 pub struct Wrap<'a> {
-    process: Option<config::Process>,
+    process: config::Process,
     root: Option<config::Root>,
 
     mounts: Vec<config::Mount>,
@@ -64,13 +64,41 @@ impl<'a> Wrap<'a> {
         Default::default()
     }
 
-    /// Create a new instance with command to execute.
-    pub fn new_cmd<S: AsRef<OsStr>>(program: S) -> Self {
+    /// Create a new instance with program to execute.
+    pub fn new_program<S: AsRef<OsStr>>(program: S) -> Self {
         let mut s = Self::new();
         let mut config = config::Process::default();
         config.set_bin(OsString::from(program.as_ref()));
         s.set_process(config);
         s
+    }
+
+    /// Set command to execute
+    pub fn program<S: AsRef<OsStr>>(&mut self, program: S) -> &mut Self {
+        self.process.set_bin((&program).into());
+        self
+    }
+
+    /// Adds an argument to pass to the program.
+    ///
+    /// Only one argument can be passed per use.
+    pub fn arg<S: AsRef<OsStr>>(&mut self, arg: S) -> &mut Self {
+        self.process.args.push((&arg).into());
+        self
+    }
+
+    /// Adds multiple arguments to pass to the program.
+    ///
+    /// To pass a single argument see [`Self::arg()`].
+    pub fn args<I, S>(&mut self, args: I) -> &mut Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        for arg in args {
+            self.arg(arg.as_ref());
+        }
+        self
     }
 
     /// Executes the callbacks and program in a child process,
@@ -116,13 +144,13 @@ impl<'a> Wrap<'a> {
     This closure will be run in the context of the child process after a
     `clone(2)`. This primarily means that any modifications made to
     memory on behalf of this closure will **not** be visible to the
-    parent process. 
+    parent process.
 
-    This method will not cause memory corruption, 
-    but it will be risky when interact with thread-related components. 
+    This method will not cause memory corruption,
+    but it will be risky when interact with thread-related components.
     For example, it's possible to create a deadlock using `std::sync::Mutex`.
     Because `clone(2)` clone whole process,
-    they do not share any modified memory area. 
+    they do not share any modified memory area.
     Child process is not thread, and should not be threat like thread.
 
     Use `pipe(2)` or other IPC method to communicate with child process.
@@ -261,7 +289,7 @@ impl<'a> Wrap<'_> {
     /// If the user only wants to execute the callback functions,
     /// this function does not have to be called.
     fn set_process(&mut self, proc: config::Process) -> &mut Self {
-        self.process = Some(proc);
+        self.process = proc.into();
         self
     }
 
