@@ -203,6 +203,9 @@ impl<'a> Wrap<'a> {
     they do not share any modified memory area.
     Child process is not thread, and should not be threat like thread.
 
+    And it's possible to disrupt file descriptors and other environment
+    configuration.
+
     Use `pipe(2)` or other IPC method to communicate with child process.
 
     For further details on this topic, please refer to the
