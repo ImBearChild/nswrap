@@ -106,6 +106,20 @@ fn panic_in_thread() {
     assert_eq!(thread_join_handle.join().unwrap().success(), true)
 }
 
+
+#[test]
+#[should_panic]
+fn panic_with_error_send() {
+    let cb = || panic!();
+    let mut wrap = Wrap::new();
+    wrap.callback(cb).unshare(config::NamespaceType::User);
+    // Normal user wont have permission to map this 
+    wrap.uid_map(2, 0, 1);
+    let ret = wrap.status().unwrap();
+
+    assert_eq!(ret.success(), false)
+}
+
 #[test]
 fn tmpfs_root_sandbox_mnt() {
     let cb = || {
