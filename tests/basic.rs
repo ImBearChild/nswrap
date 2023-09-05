@@ -129,10 +129,12 @@ fn tmpfs_root_sandbox_mnt() {
 
 #[test]
 fn raw_child_pipe() {
+    use rustix::fd::IntoRawFd;
     let (read_end, write_end) = rustix::pipe::pipe().unwrap();
+    let fd = write_end.into_raw_fd();
+
     let cb = move || {
-        let mut newfd = unsafe { OwnedFd::from_raw_fd(16) };
-        rustix::io::dup2(write_end, &mut newfd).unwrap(); // Old fd will be dropped!
+        let newfd = unsafe { OwnedFd::from_raw_fd(fd) };
         rustix::io::write(newfd, b"16").unwrap();
         return 42;
     };
