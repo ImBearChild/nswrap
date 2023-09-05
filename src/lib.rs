@@ -157,6 +157,7 @@ impl<'a> Wrap<'a> {
     /// This instance of Wrap will not be consumed, but it's
     /// queue of callback functions will be empty.
     pub fn spawn(&mut self) -> Result<Child, Error> {
+        let (read_pipe,write_pipe) = rustix::pipe::pipe().unwrap();
         let mut wrapcore = core::WrapInner {
             process: self.process.clone(),
             root: self.root.clone(),
@@ -167,9 +168,10 @@ impl<'a> Wrap<'a> {
             namespace_nsenter: self.namespace_nsenter.clone(),
             namespace_unshare: self.namespace_unshare.clone(),
             sandbox_mnt: self.sandbox_mnt.clone(),
+            comm_fd: Some(write_pipe),
         };
         wrapcore.callbacks.append(&mut self.callbacks);
-        Self::spawn_inner(wrapcore)
+        Self::spawn_inner(wrapcore,read_pipe)
     }
 
     /// Executes the command and callback functions in a child process,

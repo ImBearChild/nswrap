@@ -4,6 +4,7 @@ use std::{
     collections::VecDeque,
     ffi::{OsStr, OsString},
     fs::OpenOptions,
+    io::prelude::*,
     os::unix::prelude::OsStrExt,
 };
 
@@ -20,7 +21,10 @@ const STACK_SIZE: usize = 122880;
 pub type WrapCbBox<'a> = Box<dyn FnOnce() -> isize + 'a>;
 
 impl crate::Wrap<'_> {
-    pub(crate) fn spawn_inner(mut wrap: WrapInner) -> Result<Child, Error> {
+    pub(crate) fn spawn_inner(
+        mut wrap: WrapInner,
+        comm_fd: rustix::fd::OwnedFd,
+    ) -> Result<Child, Error> {
         let mut p: Box<[u8; STACK_SIZE]> = Box::new([0; STACK_SIZE]);
 
         let pid = match unsafe {
@@ -35,9 +39,27 @@ impl crate::Wrap<'_> {
             Err(e) => return Err(e),
         };
 
-        Ok(Child {
-            pid: unsafe { rustix::process::Pid::from_raw_unchecked(pid.try_into().unwrap()) },
-        })
+        let pid = unsafe { rustix::process::Pid::from_raw_unchecked(pid.try_into().unwrap()) };
+        let mut buf = Vec::new();
+        let mut comm_file = std::fs::File::from(comm_fd);
+        loop {
+            match rustix::process::waitpid(Some(pid), rustix::process::WaitOptions::NOHANG) {
+                Ok(r) => match r {
+                    Some(_) => panic!("Child process exit without finishing initialization!"),
+                    None => {
+                        comm_file.read_to_end(&mut buf).unwrap();
+                        if buf.ends_with(b"NSWRAP_CHILD_INIT_DONE") {
+                            break;
+                        }
+                    }
+                },
+                Err(err) => {
+                    panic!("?")
+                }
+            }
+        }
+
+        Ok(Child { pid })
     }
 }
 
@@ -55,6 +77,7 @@ pub(crate) struct WrapInner<'a> {
     pub(crate) namespace_unshare: config::NamespaceSet,
 
     pub(crate) sandbox_mnt: bool,
+    pub(crate) comm_fd: Option<rustix::fd::OwnedFd>,
 }
 
 impl WrapInner<'_> {
@@ -71,6 +94,9 @@ impl WrapInner<'_> {
         if self.sandbox_mnt {
             self.set_up_tmpfs_cwd();
         }
+
+        let mut comm_file = std::fs::File::from(self.comm_fd.take().unwrap());
+        comm_file.write(b"NSWRAP_CHILD_INIT_DONE").unwrap();
 
         let ret = self.execute_callbacks();
 
@@ -89,7 +115,9 @@ impl WrapInner<'_> {
         cmd.args(self.process.args());
 
         match &self.process.cwd {
-            Some(cwd) => {cmd.current_dir(cwd);},
+            Some(cwd) => {
+                cmd.current_dir(cwd);
+            }
             None => (),
         }
 
